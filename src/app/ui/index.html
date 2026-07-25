@@ -1,0 +1,640 @@
+<!doctype html>
+<!-- Citation-viewer UI: pick/build a comparison, chat with streaming answers, and
+     click any inline [n] citation badge to see the cited page with the
+     exact region highlighted. Vanilla JS, no build step. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Document Delta &amp; Grounded Chat</title>
+<style>
+  :root {
+    --bg:#f5f7fb; --panel:#ffffff; --ink:#161b22; --muted:#5f6b7a; --line:#e7eaf0;
+    --accent:#6366f1; --accent-ink:#fff;
+    --base:#2f6fed; --base-bg:#eaf1ff; --base-line:#cfe0ff;
+    --rev:#1f9d63; --rev-bg:#e8f7ee; --rev-line:#c4ecd3;
+    --delta:#c9871a; --delta-bg:#fff6e3; --delta-line:#f0dcae;
+    --danger:#d94848; --danger-bg:#fff1f1; --danger-line:#f6cccc;
+    --shadow:0 1px 2px rgba(16,24,40,.04), 0 12px 32px -12px rgba(16,24,40,.14);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#0f1319; --panel:#161c25; --ink:#e7ecf3; --muted:#8b97a7; --line:#26303c;
+      --base-bg:#12233f; --base-line:#1e3a63; --rev-bg:#0f2a1c; --rev-line:#1c4a32;
+      --delta-bg:#2c2410; --delta-line:#4a3c14; --danger-bg:#2c1717; --danger-line:#4a2020;
+      --shadow:0 1px 3px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
+    }
+  }
+  * { box-sizing:border-box; }
+  html,body { height:100%; }
+  body { margin:0; font:14px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+         color:var(--ink); background:var(--bg); letter-spacing:-.003em;
+         -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+         text-rendering:optimizeLegibility; }
+  header { display:flex; align-items:center; gap:10px; padding:11px 18px; color:#e7ecf3;
+           background:linear-gradient(180deg,#141a29,#0e131e);
+           border-bottom:1px solid rgba(99,102,241,.28); }
+  header .dot { width:9px; height:9px; border-radius:50%; background:var(--accent);
+                box-shadow:0 0 0 4px rgba(99,102,241,.22); }
+  header b { font-weight:650; letter-spacing:.2px; }
+  header .sub { color:#8b97a7; font-size:12px; margin-left:2px; }
+
+  .wrap { display:flex; height:calc(100vh - 47px); }
+  .left { width:46%; min-width:380px; max-width:640px; display:flex; flex-direction:column;
+          border-right:1px solid var(--line); background:var(--bg); }
+  .right { flex:1; overflow:auto; position:relative; }
+
+  .pane { padding:12px 14px; }
+  .setup { border-bottom:1px solid var(--line); background:var(--panel); }
+
+  label.fld { display:block; font-size:11px; font-weight:650; letter-spacing:.4px;
+              text-transform:uppercase; color:var(--muted); margin:0 0 5px; }
+  .row { display:flex; gap:8px; align-items:center; }
+  input,select,textarea,button { font:inherit; color:inherit; }
+  input,select { padding:7px 9px; border:1px solid var(--line); border-radius:8px;
+                 background:var(--panel); width:100%; }
+  input:focus,select:focus { outline:none; border-color:var(--accent);
+                              box-shadow:0 0 0 3px rgba(99,102,241,.16); }
+  button { border:0; border-radius:8px; padding:8px 12px; cursor:pointer; font-weight:600;
+           background:var(--accent); color:var(--accent-ink); transition:filter .12s,opacity .12s; }
+  button:hover { filter:brightness(1.06); }
+  button:active { transform:translateY(1px); }
+  button:disabled { opacity:.5; cursor:not-allowed; transform:none; }
+  button.sec { background:var(--panel); color:var(--ink); border:1px solid var(--line); }
+  button.icon { padding:8px 10px; }
+
+  /* --- comparison picker --- */
+  .picker { display:flex; gap:8px; align-items:center; margin-bottom:12px; }
+  .stats { display:flex; flex-wrap:wrap; gap:6px; margin-top:2px; }
+  .stat { font-size:11.5px; font-weight:600; padding:2px 9px; border-radius:999px;
+          border:1px solid var(--line); background:var(--bg); color:var(--muted); }
+  .stat b { color:var(--ink); }
+  .stat.added { color:var(--rev); background:var(--rev-bg); border-color:var(--rev-line); }
+  .stat.removed { color:var(--danger); background:var(--danger-bg); border-color:var(--danger-line); }
+  .stat.modified,.stat.moved { color:var(--delta); background:var(--delta-bg); border-color:var(--delta-line); }
+
+  /* --- upload / drop zones --- */
+  .zones { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:10px 0; }
+  .zone { border:1.5px dashed var(--line); border-radius:11px; background:var(--panel);
+          padding:14px 12px; text-align:center; cursor:pointer; position:relative;
+          transition:border-color .12s, background .12s; min-height:104px;
+          display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; }
+  .zone:hover { border-color:var(--accent); }
+  .zone.drag { border-color:var(--accent); background:rgba(99,102,241,.07); }
+  .zone .tag { position:absolute; top:8px; left:10px; font-size:10.5px; font-weight:700;
+               letter-spacing:.5px; text-transform:uppercase; color:var(--muted); }
+  .zone.base .tag { color:var(--base); }
+  .zone.rev  .tag { color:var(--rev); }
+  .zone .glyph { font-size:20px; opacity:.7; }
+  .zone .cta { font-size:12.5px; color:var(--muted); }
+  .zone .types { font-size:10.5px; color:var(--muted); opacity:.75; }
+  .zone.filled { border-style:solid; cursor:default; }
+  .zone.base.filled { border-color:var(--base-line); background:var(--base-bg); }
+  .zone.rev.filled  { border-color:var(--rev-line);  background:var(--rev-bg); }
+  .file { display:flex; align-items:center; gap:8px; width:100%; text-align:left; }
+  .file .fi { font-size:18px; }
+  .file .meta { flex:1; min-width:0; }
+  .file .nm { font-weight:600; font-size:12.5px; white-space:nowrap; overflow:hidden;
+              text-overflow:ellipsis; }
+  .file .sz { font-size:11px; color:var(--muted); }
+  .file .x { border:0; background:transparent; color:var(--muted); font-size:16px;
+             cursor:pointer; padding:2px 6px; border-radius:6px; }
+  .file .x:hover { background:rgba(0,0,0,.08); color:var(--ink); }
+  .prog { position:absolute; left:0; bottom:0; height:3px; width:0; background:var(--accent);
+          border-radius:0 0 11px 11px; transition:width .2s; }
+  .pathlink { font-size:11px; color:var(--accent); cursor:pointer; margin-top:2px; }
+  .patht { margin-top:6px; display:none; }
+  .patht.show { display:block; }
+  .actions { display:flex; gap:8px; align-items:center; margin-top:2px; }
+  .note { font-size:11.5px; color:var(--muted); }
+
+  /* --- chat log --- */
+  #log { flex:1; overflow:auto; padding:14px; display:flex; flex-direction:column; gap:14px; }
+  .empty { margin:auto; text-align:center; color:var(--muted); max-width:280px; }
+  .empty .big { font-size:26px; margin-bottom:6px; opacity:.6; }
+  .msg { display:flex; flex-direction:column; gap:6px; }
+  .bubble { max-width:92%; padding:9px 12px; border-radius:12px; }
+  .msg.user { align-items:flex-end; }
+  .msg.user .bubble { background:var(--accent); color:#fff; border-bottom-right-radius:4px;
+                      box-shadow:0 2px 10px -3px rgba(99,102,241,.55); }
+  .msg.bot .bubble { background:var(--panel); border:1px solid var(--line);
+                     border-bottom-left-radius:4px; box-shadow:var(--shadow);
+                     white-space:pre-wrap; word-wrap:break-word; }
+  .msg.bot .bubble.refused { background:var(--danger-bg); border-color:var(--danger-line); }
+  /* rendered markdown (applied to the final answer) */
+  .bubble.md { white-space:normal; }
+  .bubble.md > :first-child { margin-top:0; }
+  .bubble.md > :last-child { margin-bottom:0; }
+  .bubble.md p { margin:0 0 8px; }
+  .bubble.md ul, .bubble.md ol { margin:6px 0 8px; padding-left:20px; }
+  .bubble.md li { margin:2px 0; }
+  .bubble.md li > ul, .bubble.md li > ol { margin:2px 0; }
+  .bubble.md h1, .bubble.md h2, .bubble.md h3, .bubble.md h4 { margin:10px 0 6px; font-size:14px;
+            font-weight:650; line-height:1.3; }
+  .bubble.md h1 { font-size:16px; } .bubble.md h2 { font-size:15px; }
+  .bubble.md code { background:var(--bg); border:1px solid var(--line); border-radius:4px;
+            padding:0 4px; font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace; }
+  .bubble.md pre.cb { background:var(--bg); border:1px solid var(--line); border-radius:8px;
+            padding:9px 11px; overflow-x:auto; margin:6px 0; }
+  .bubble.md pre.cb code { border:0; background:none; padding:0; }
+  .bubble.md blockquote { margin:6px 0; padding:2px 10px; border-left:3px solid var(--line);
+            color:var(--muted); }
+  .bubble.md strong { font-weight:650; }
+  .bubble.md a { color:var(--accent); }
+  .bubble.md hr { border:0; border-top:1px solid var(--line); margin:10px 0; }
+  .bubble.md table { border-collapse:collapse; margin:6px 0; font-size:13px; }
+  .bubble.md th, .bubble.md td { border:1px solid var(--line); padding:4px 8px; text-align:left; }
+  .cursor { display:inline-block; width:7px; height:15px; background:var(--accent);
+            margin-left:1px; vertical-align:-2px; animation:blink 1s step-start infinite; }
+  @keyframes blink { 50% { opacity:0; } }
+
+  /* inline [n] citation badge inside an answer */
+  .cbadge { display:inline-flex; align-items:center; justify-content:center;
+            min-width:16px; height:16px; padding:0 4px; margin:0 1px; font-size:10.5px;
+            font-weight:700; line-height:1; border-radius:5px; cursor:pointer;
+            vertical-align:top; position:relative; top:-1px; border:1px solid transparent; }
+  .cbadge.base  { color:var(--base);  background:var(--base-bg);  border-color:var(--base-line); }
+  .cbadge.rev   { color:var(--rev);   background:var(--rev-bg);   border-color:var(--rev-line); }
+  .cbadge.delta { color:var(--delta); background:var(--delta-bg); border-color:var(--delta-line); }
+  .cbadge:hover { filter:brightness(.96); box-shadow:0 0 0 2px rgba(99,102,241,.18); }
+
+  /* citation cards below an answer */
+  .cites { display:flex; flex-direction:column; gap:6px; margin-top:2px; }
+  .cite { display:flex; align-items:center; gap:9px; padding:7px 10px; border-radius:9px;
+          border:1px solid var(--line); background:var(--panel); cursor:pointer;
+          transition:transform .1s, box-shadow .1s; }
+  .cite:hover { transform:translateX(2px); box-shadow:var(--shadow); }
+  .cite .num { flex:0 0 auto; width:18px; height:18px; border-radius:5px; font-size:11px;
+               font-weight:700; display:flex; align-items:center; justify-content:center; }
+  .cite.base  .num { color:var(--base);  background:var(--base-bg); }
+  .cite.rev   .num { color:var(--rev);   background:var(--rev-bg); }
+  .cite.delta .num { color:var(--delta); background:var(--delta-bg); }
+  .cite .body { flex:1; min-width:0; }
+  .cite .lbl { font-size:12.5px; font-weight:600; white-space:nowrap; overflow:hidden;
+               text-overflow:ellipsis; }
+  .cite .sub { font-size:11px; color:var(--muted); }
+  .cite .kind { flex:0 0 auto; font-size:10px; font-weight:700; letter-spacing:.4px;
+                text-transform:uppercase; padding:2px 7px; border-radius:999px; }
+  .cite.base  .kind { color:var(--base);  background:var(--base-bg); }
+  .cite.rev   .kind { color:var(--rev);   background:var(--rev-bg); }
+  .cite.delta .kind { color:var(--delta); background:var(--delta-bg); }
+  .tracey { font-size:10.5px; color:var(--muted); margin-top:2px; }
+
+  /* --- composer --- */
+  .composer { border-top:1px solid var(--line); background:var(--panel); padding:10px 12px; }
+  .composer .row { gap:8px; }
+
+  /* --- viewer --- */
+  .vbar { position:sticky; top:0; z-index:2; display:flex; align-items:center; gap:10px;
+          padding:9px 14px; background:var(--panel); border-bottom:1px solid var(--line);
+          box-shadow:var(--shadow); }
+  .vbar .vt { font-weight:600; font-size:13px; }
+  .vbar .vsub { font-size:11.5px; color:var(--muted); }
+  .vbar .sp { flex:1; }
+  .zoom { display:flex; align-items:center; gap:4px; }
+  .zoom button { background:var(--panel); color:var(--ink); border:1px solid var(--line);
+                 padding:4px 9px; font-size:14px; line-height:1; }
+  .zoom span { font-size:11.5px; color:var(--muted); min-width:38px; text-align:center; }
+  .vstage { padding:16px; text-align:center; }
+  .viewer-wrap { display:inline-block; position:relative; box-shadow:var(--shadow); background:#fff;
+                 border-radius:4px; overflow:hidden; }
+  .viewer-wrap img { display:block; width:100%; }   /* wrap sized in px; 100% native at zoom 1 */
+  .hl { position:absolute; border:2px solid #ff3b3b; background:rgba(255,59,59,.18); }
+  .hint { color:var(--muted); padding:24px; text-align:center; margin:auto; }
+  .hint .big { font-size:26px; opacity:.5; display:block; margin-bottom:6px; }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot"></span>
+  <b>Document Delta &amp; Grounded Chat</b>
+  <span class="sub">compare two revisions · ask · trace every answer to its source</span>
+</header>
+
+<div class="wrap">
+  <div class="left">
+    <!-- setup: pick or build a comparison -->
+    <div class="setup pane">
+      <div class="picker">
+        <div style="flex:1">
+          <label class="fld" for="cmp">Active comparison</label>
+          <select id="cmp"></select>
+        </div>
+        <button class="sec icon" title="Refresh list" onclick="loadComparisons()">↻</button>
+      </div>
+      <div class="stats" id="stats"></div>
+
+      <div class="zones">
+        <div class="zone base" id="zA" onclick="pick('A')"
+             ondragover="dz(event,'A',1)" ondragleave="dz(event,'A',0)" ondrop="drop(event,'A')">
+          <span class="tag">Base</span>
+          <span class="glyph">⬆</span>
+          <span class="cta">Drop or click to upload</span>
+          <span class="types">pdf · png · jpg · tif · bmp · dxf</span>
+          <div class="prog" id="prA"></div>
+        </div>
+        <div class="zone rev" id="zB" onclick="pick('B')"
+             ondragover="dz(event,'B',1)" ondragleave="dz(event,'B',0)" ondrop="drop(event,'B')">
+          <span class="tag">Revised</span>
+          <span class="glyph">⬆</span>
+          <span class="cta">Drop or click to upload</span>
+          <span class="types">pdf · png · jpg · tif · bmp · dxf</span>
+          <div class="prog" id="prB"></div>
+        </div>
+      </div>
+
+      <div class="patht" id="ptA">
+        <input id="pa" placeholder="…or paste a base document path" oninput="onPath('A')">
+      </div>
+      <div class="patht" id="ptB">
+        <input id="pb" placeholder="…or paste a revised document path" oninput="onPath('B')">
+      </div>
+
+      <div class="actions">
+        <button id="cmpBtn" onclick="compareNew()" disabled>Compare documents</button>
+        <span class="sp" style="flex:1"></span>
+        <span class="note" id="setupNote"></span>
+      </div>
+    </div>
+
+    <!-- chat -->
+    <input type="file" id="fileIn" accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.dxf" style="display:none">
+    <div id="log">
+      <div class="empty" id="emptyState">
+        <div class="big">💬</div>
+        Pick or build a comparison, then ask what changed — every answer cites the page it came from.
+      </div>
+    </div>
+
+    <div class="composer">
+      <div class="row">
+        <input id="q" placeholder="Ask… e.g. what changed in the duty spec?"
+               onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();ask();}">
+        <button id="sendBtn" onclick="ask()">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- citation viewer -->
+  <div class="right" id="viewer">
+    <div class="hint"><span class="big">📄</span>Click a citation to view its source region.</div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => s.replace(/[&<>]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]));
+const fmtSize = b => b < 1024 ? b+' B' : b < 1048576 ? (b/1024).toFixed(0)+' KB' : (b/1048576).toFixed(1)+' MB';
+const glyphFor = n => /\.pdf$/i.test(n) ? '📕' : /\.dxf$/i.test(n) ? '📐' : '🖼️';
+
+let active = null;            // active comparison object {comparison_id, pid_a, pid_b, summary}
+let byId = {};               // comparison_id -> comparison object
+const side = { A: {pid:null, name:null}, B: {pid:null, name:null} };
+let streaming = false;
+
+/* ---------- comparisons ---------- */
+async function loadComparisons() {
+  let cs = [];
+  try { cs = await (await fetch('/comparisons')).json(); } catch (e) { return; }
+  cs.sort((a,b) => (a.comparison_id||'').localeCompare(b.comparison_id||''));
+  byId = {}; cs.forEach(c => byId[c.comparison_id] = c);
+  $('cmp').innerHTML = cs.length
+    ? cs.map(c => `<option value="${c.comparison_id}">${c.comparison_id}` +
+        (c.summary && c.summary.total!=null ? ` · ${c.summary.total} changes` : '') + `</option>`).join('')
+    : '<option value="">No comparisons yet — upload two documents below</option>';
+  if (cs.length) setActive(cs[0].comparison_id);
+  else { active = null; renderStats(null); }
+}
+$('cmp').onchange = e => setActive(e.target.value);
+function setActive(cid) {
+  active = byId[cid] || null;
+  $('cmp').value = cid;
+  renderStats(active && active.summary);
+}
+function renderStats(s) {
+  const el = $('stats');
+  if (!s || s.total==null) { el.innerHTML = ''; return; }
+  const cls = {added:'added', removed:'removed', modified:'modified', moved:'moved'};
+  const chips = [`<span class="stat"><b>${s.total}</b> changes</span>`];
+  for (const [k,v] of Object.entries(s.by_change_type || {})) {
+    if (!v) continue;
+    chips.push(`<span class="stat ${cls[k]||''}"><b>${v}</b> ${k}</span>`);
+  }
+  el.innerHTML = chips.join('');
+}
+
+/* ---------- upload / drop zones ---------- */
+let pickingFor = null;
+function pick(s) {
+  if (side[s].pid) return;              // filled — clicking a file card handles clear
+  pickingFor = s;
+  $('fileIn').value = '';
+  $('fileIn').click();
+}
+$('fileIn').onchange = e => { const f = e.target.files[0]; if (f && pickingFor) upload(pickingFor, f); };
+
+function dz(e, s, on) { e.preventDefault(); $('z'+s).classList.toggle('drag', !!on); }
+function drop(e, s) {
+  e.preventDefault(); $('z'+s).classList.remove('drag');
+  const f = e.dataTransfer.files[0]; if (f) upload(s, f);
+}
+
+async function upload(s, file) {
+  const zone = $('z'+s), bar = $('pr'+s);
+  bar.style.width = '15%';
+  const fd = new FormData(); fd.append('file', file);
+  try {
+    // XHR for real upload progress
+    const d = await new Promise((res, rej) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/upload');
+      xhr.upload.onprogress = ev => { if (ev.lengthComputable) bar.style.width = (15 + ev.loaded/ev.total*70)+'%'; };
+      xhr.onload = () => { try { res(JSON.parse(xhr.responseText)); } catch { rej(xhr.responseText); } };
+      xhr.onerror = () => rej('network error');
+      xhr.send(fd);
+    });
+    bar.style.width = '100%';
+    if (!d.pid) throw (d.detail || JSON.stringify(d));
+    side[s] = { pid: d.pid, name: d.name || file.name };
+    $('p'+(s==='A'?'a':'b')).value = d.pid;
+    renderZone(s, file.size);
+  } catch (err) {
+    $('setupNote').textContent = 'upload failed: ' + err;
+  } finally {
+    setTimeout(() => { bar.style.width = '0'; }, 500);
+  }
+  refreshCompareBtn();
+}
+
+function renderZone(s, size) {
+  const zone = $('z'+s), st = side[s];
+  zone.classList.add('filled');
+  const sizeStr = size ? fmtSize(size) : '';
+  zone.innerHTML =
+    `<span class="tag">${s==='A'?'Base':'Revised'}</span>
+     <div class="file">
+       <span class="fi">${glyphFor(st.name||'')}</span>
+       <div class="meta"><div class="nm">${esc(st.name||st.pid)}</div>
+         <div class="sz">${sizeStr}${sizeStr && st.pid ? ' · ' : ''}<span title="${esc(st.pid)}">uploaded</span></div></div>
+       <button class="x" title="Remove" onclick="clearSide(event,'${s}')">✕</button>
+     </div>
+     <div class="prog" id="pr${s}"></div>`;
+}
+function clearSide(e, s) {
+  e.stopPropagation();
+  side[s] = { pid:null, name:null };
+  $('p'+(s==='A'?'a':'b')).value = '';
+  const zone = $('z'+s);
+  zone.classList.remove('filled');
+  zone.innerHTML =
+    `<span class="tag">${s==='A'?'Base':'Revised'}</span>
+     <span class="glyph">⬆</span>
+     <span class="cta">Drop or click to upload</span>
+     <span class="types">pdf · png · jpg · tif · bmp · dxf</span>
+     <div class="prog" id="pr${s}"></div>`;
+  refreshCompareBtn();
+}
+function onPath(s) {
+  const v = $('p'+(s==='A'?'a':'b')).value.trim();
+  side[s].pid = v || null;
+  refreshCompareBtn();
+}
+function togglePaths() {
+  $('ptA').classList.toggle('show'); $('ptB').classList.toggle('show');
+}
+function refreshCompareBtn() {
+  $('cmpBtn').disabled = !(side.A.pid && side.B.pid) || streaming;
+}
+
+async function compareNew() {
+  if (!side.A.pid || !side.B.pid) return;
+  const btn = $('cmpBtn'); btn.disabled = true; btn.textContent = 'Comparing…';
+  $('setupNote').textContent = '';
+  try {
+    const r = await fetch('/compare', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({pid_a: side.A.pid, pid_b: side.B.pid})});
+    const d = await r.json();
+    if (d.comparison_id) {
+      await loadComparisons();
+      setActive(d.comparison_id);
+      $('setupNote').textContent = 'built ' + d.comparison_id;
+    } else {
+      $('setupNote').textContent = 'error: ' + (d.detail || JSON.stringify(d));
+    }
+  } catch (e) {
+    $('setupNote').textContent = 'compare error: ' + e;
+  } finally {
+    btn.textContent = 'Compare documents'; refreshCompareBtn();
+  }
+}
+
+/* ---------- chat (streaming) ---------- */
+function labelFor(ct) {
+  // prefer the semantic key (field:X / note:N / tag:X); fall back to ref
+  if (ct.key) { const [k,v] = ct.key.split(':'); return v ? `${v} (${k})` : ct.key; }
+  return ct.ref || 'source';
+}
+function kindOf(ct) {
+  if (ct.source_type === 'delta_report') return 'delta';
+  if (active && ct.pid && ct.pid === active.pid_a) return 'base';
+  if (active && ct.pid && ct.pid === active.pid_b) return 'rev';
+  return 'base';
+}
+function kindText(k) { return k==='delta' ? 'Δ Delta' : k==='rev' ? 'Revised' : 'Base'; }
+
+async function ask() {
+  if (streaming) return;
+  if (!active) { $('setupNote').textContent = 'pick or build a comparison first'; return; }
+  const q = $('q').value.trim(); if (!q) return;
+  $('q').value = '';
+  const es = $('emptyState'); if (es) es.remove();
+
+  // user bubble
+  const um = document.createElement('div'); um.className = 'msg user';
+  um.innerHTML = `<div class="bubble">${esc(q)}</div>`;
+  $('log').appendChild(um);
+
+  // bot bubble (streams in)
+  const bm = document.createElement('div'); bm.className = 'msg bot';
+  const bub = document.createElement('div'); bub.className = 'bubble';
+  bub.innerHTML = '<span class="cursor"></span>';
+  bm.appendChild(bub); $('log').appendChild(bm);
+  scrollLog();
+
+  streaming = true; $('sendBtn').disabled = true; refreshCompareBtn();
+  let text = '';
+  try {
+    const resp = await fetch('/chat/stream', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({comparison_id: active.comparison_id, query: q})});
+    if (!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status);
+    const reader = resp.body.getReader(); const dec = new TextDecoder(); let buf = '';
+    let final = null;
+    while (true) {
+      const {value, done} = await reader.read(); if (done) break;
+      buf += dec.decode(value, {stream:true});
+      let i;
+      while ((i = buf.indexOf('\n\n')) >= 0) {
+        const chunk = buf.slice(0, i); buf = buf.slice(i + 2);
+        const line = chunk.split('\n').find(l => l.startsWith('data:')); if (!line) continue;
+        const evt = JSON.parse(line.slice(5).trim());
+        if (evt.type === 'token') {
+          text += evt.text;
+          bub.innerHTML = esc(text) + '<span class="cursor"></span>';
+          scrollLog();
+        } else if (evt.type === 'final') {
+          final = evt;
+        } else if (evt.type === 'error') {
+          throw new Error(evt.message);
+        }
+      }
+    }
+    renderAnswer(bm, bub, text, final);
+  } catch (e) {
+    bub.classList.add('refused');
+    bub.textContent = text || ('error: ' + e.message);
+  } finally {
+    streaming = false; $('sendBtn').disabled = false; refreshCompareBtn(); scrollLog();
+  }
+}
+
+/* tiny self-contained markdown -> safe HTML (escapes first, no external libs) */
+function mdToHtml(src) {
+  src = (src || '').replace(/\r\n?/g, '\n');
+  const blocks = [];
+  // lift fenced code blocks out so inline rules don't touch their contents
+  src = src.replace(/```[^\n]*\n([\s\S]*?)```/g, (m, code) => {
+    blocks.push('<pre class="cb"><code>' + esc(code.replace(/\n$/, '')) + '</code></pre>');
+    return '\n@@B' + (blocks.length - 1) + '@@\n';
+  });
+  const inline = t => esc(t)
+    .replace(/`([^`]+)`/g, (m, c) => '<code>' + c + '</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/__([^_]+)__/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  const blockStart = l => /^\s*(#{1,6}\s|[-*+]\s|\d+\.\s|>\s?|-{3,}\s*$|@@B\d+@@)/.test(l);
+  const lines = src.split('\n');
+  let out = '', i = 0;
+  while (i < lines.length) {
+    const ln = lines[i], ph = ln.trim().match(/^@@B(\d+)@@$/);
+    if (ph) { out += blocks[+ph[1]]; i++; continue; }
+    if (/^\s*-{3,}\s*$/.test(ln)) { out += '<hr>'; i++; continue; }
+    let m;
+    if ((m = ln.match(/^\s*(#{1,6})\s+(.*)$/))) {
+      const h = m[1].length; out += `<h${h}>${inline(m[2])}</h${h}>`; i++; continue;
+    }
+    if (/^\s*[-*+]\s+/.test(ln)) {
+      const it = [];
+      while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i]))
+        { it.push('<li>' + inline(lines[i].replace(/^\s*[-*+]\s+/, '')) + '</li>'); i++; }
+      out += '<ul>' + it.join('') + '</ul>'; continue;
+    }
+    if (/^\s*\d+\.\s+/.test(ln)) {
+      const it = [];
+      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i]))
+        { it.push('<li>' + inline(lines[i].replace(/^\s*\d+\.\s+/, '')) + '</li>'); i++; }
+      out += '<ol>' + it.join('') + '</ol>'; continue;
+    }
+    if (/^\s*>\s?/.test(ln)) {
+      const q = [];
+      while (i < lines.length && /^\s*>\s?/.test(lines[i]))
+        { q.push(inline(lines[i].replace(/^\s*>\s?/, ''))); i++; }
+      out += '<blockquote>' + q.join('<br>') + '</blockquote>'; continue;
+    }
+    if (ln.trim() === '') { i++; continue; }
+    const para = [];
+    while (i < lines.length && lines[i].trim() !== '' && !blockStart(lines[i]))
+      { para.push(inline(lines[i])); i++; }
+    out += '<p>' + para.join('<br>') + '</p>';
+  }
+  return out;
+}
+
+function renderAnswer(bm, bub, text, final) {
+  final = final || {citations: [], grounded: !!text};
+  // only citations with a viewable page region (drops the synthetic "overview" entry)
+  const cites = (final.citations || []).filter(c => c.pid);
+  const byN = {}; cites.forEach(c => { if (c.n) byN[c.n] = c; });
+
+  // render markdown, then turn each [n] into a clickable badge for its citation
+  let html = mdToHtml(text).replace(/\[(\d+)\]/g, (m, n) => {
+    const ct = byN[+n]; if (!ct) return m;
+    const k = kindOf(ct);
+    return `<span class="cbadge ${k}" title="${esc(labelFor(ct))}" data-n="${n}">${n}</span>`;
+  });
+  bub.innerHTML = html;
+  bub.classList.add('md');
+  if (!final.grounded) bub.classList.add('refused');
+  bub.querySelectorAll('.cbadge').forEach(b =>
+    b.onclick = () => showCitation(byN[+b.dataset.n]));
+
+  // citation cards removed — the inline [n] badges above are the clickable citations
+  if (final.trace_id) {
+    const t = document.createElement('div'); t.className = 'tracey';
+    t.textContent = 'trace ' + final.trace_id;
+    bm.appendChild(t);
+  }
+}
+function scrollLog() { $('log').scrollTop = $('log').scrollHeight; }
+
+/* ---------- citation viewer ---------- */
+let zoom = 1;                          // 1 = native page resolution (viewer scrolls)
+function applyZoom() {
+  const w = document.querySelector('.viewer-wrap'); if (!w) return;
+  const natW = +w.dataset.natw || 0;
+  if (natW) w.style.width = Math.round(natW * zoom) + 'px';
+  const zl = $('zlbl'); if (zl) zl.textContent = Math.round(zoom * 100) + '%';
+}
+function setZoom(z) { zoom = Math.min(3, Math.max(0.25, z)); applyZoom(); }
+function fitWidth() {                   // shrink so the whole page width fits the pane
+  const w = document.querySelector('.viewer-wrap'); if (!w) return;
+  const natW = +w.dataset.natw || 0;
+  if (natW) setZoom(($('viewer').clientWidth - 34) / natW);
+}
+
+async function showCitation(ct) {
+  const v = $('viewer');
+  if (!ct) return;
+  if (!ct.pid) {
+    v.innerHTML = '<div class="hint"><span class="big">🔗</span>This citation has no source page.</div>';
+    return;
+  }
+  const k = kindOf(ct);
+  v.innerHTML =
+    `<div class="vbar">
+       <div><div class="vt">${esc(labelFor(ct))}</div>
+         <div class="vsub">${kindText(k)} · page ${((ct.page||0)+1)}</div></div>
+       <span class="sp"></span>
+       <div class="zoom">
+         <button onclick="setZoom(zoom-0.2)" title="Zoom out">−</button>
+         <span id="zlbl">100%</span>
+         <button onclick="setZoom(zoom+0.2)" title="Zoom in">+</button>
+         <button class="sec" onclick="setZoom(1)" title="Native size">1:1</button>
+         <button class="sec" onclick="fitWidth()" title="Fit width">Fit</button>
+       </div>
+     </div>
+     <div class="vstage"><div class="hint">loading page…</div></div>`;
+  const stage = v.querySelector('.vstage');
+  const url = `/page?pid=${encodeURIComponent(ct.pid)}&page=${ct.page||0}`;
+  const wrap = document.createElement('div'); wrap.className = 'viewer-wrap';
+  const img = document.createElement('img'); img.src = url;
+  img.onerror = () => { stage.innerHTML = '<div class="hint">could not render this page</div>'; };
+  img.onload = () => {
+    stage.innerHTML = ''; stage.appendChild(wrap); wrap.appendChild(img);
+    wrap.dataset.natw = img.naturalWidth;        // native px -> viewer scrolls at 100%
+    zoom = 1; applyZoom();
+    if (ct.bbox && ct.bbox.length === 4) {
+      const [x0,y0,x1,y1] = ct.bbox;
+      const hl = document.createElement('div'); hl.className = 'hl';
+      hl.style.left = (x0*100)+'%'; hl.style.top = (y0*100)+'%';
+      hl.style.width = ((x1-x0)*100)+'%'; hl.style.height = ((y1-y0)*100)+'%';
+      wrap.appendChild(hl);
+      hl.scrollIntoView({block:'center', inline:'center', behavior:'smooth'});
+    }
+  };
+}
+
+loadComparisons();
+</script>
+</body>
+</html>

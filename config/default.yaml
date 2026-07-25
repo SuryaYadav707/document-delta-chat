@@ -1,0 +1,65 @@
+# Central config — config over hardcoding. Env vars override (see src/config.py).
+
+llm:
+  provider: ${LLM_PROVIDER:openai}      # openai | bedrock (swappable behind LangChain)
+  chat_model: ${LLM_CHAT_MODEL:gpt-4o-mini}
+  reason_model: ${LLM_REASON_MODEL:gpt-4o}   # judge + vision verify
+  embed_model: ${EMBED_MODEL:text-embedding-3-small}
+  temperature: 0.0            # temp 0 everywhere; non-determinism isolated + documented
+
+ingest:
+  scanned:
+    dpi: 200                  # 150-300; higher = better small-tag OCR, slower
+    deskew: true
+    threshold: adaptive
+    ocr_engine: paddleocr     # paddleocr | textract | doctr
+    device: auto              # auto|cpu|gpu (auto -> gpu if paddle CUDA build present)
+    cpu_threads: 12           # paddle underuses cores by default
+    model_tier: default       # default (accurate PP-OCRv6_medium) | mobile (fast) | server
+    use_textline_orientation: true  # false skips a model pass (faster, misses rotated tags)
+    ocr_conf_verify_below: 0.80   # regions below this confidence get vision-LLM verify
+    vision_verify: true
+    vision_max_calls: 30      # cap vision-verify calls per page (cost)
+
+delta:
+  # deterministic thresholds — reproducible structural output
+  text_sim_weight: 0.8        # content-DOMINANT: a moved item still matches its twin
+  spatial_sim_weight: 0.2     # position only breaks ties among similar-text candidates
+  match_threshold: 0.5        # cost below this => matched
+  modify_min_text_delta: 0.05 # ignore trivial reword/whitespace
+  note_anchor_sim: 0.5        # min text-sim to trust a note number as the same note (else re-match by content)
+  annotate_max: 40            # max LLM significance annotations per comparison (cost bound)
+  # "moved" = a matched element changed SHEET/PAGE (engineering-meaningful).
+  # Intra-sheet XY position on a P&ID is NOT meaningful (drafters reflow), so
+  # text XY-moves are ignored; only GEOMETRY symbols get a low-confidence
+  # intra-sheet "layout" signal. True topological move needs connectivity (cut).
+  move_min_shift: 0.02        # geometry-only: intra-sheet centroid shift => low-conf layout signal
+  geometry_layout_conf: 0.4   # confidence assigned to a cosmetic geometry layout shift
+  large_bucket: 400           # buckets bigger than this use greedy match (avoid O(n^3))
+  use_llm_annotation: true    # LLM only annotates ambiguous modifies; --no-llm disables
+
+chat:
+  top_k: 8
+  vector_store: chroma        # langchain-chroma
+  chroma_dir: ${CHROMA_DIR:.chroma}
+  overview_llm: false         # true = LLM-generated doc overview (any doc type, per-doc cost); false = generic field-dump
+  router:
+    use_llm: true             # LLM self-query routing (maps any doc name/subject -> base/revised); false = rules only
+    change_keywords: [changed, change, changes, added, removed, modified, modification,
+                      difference, differences, diff, delta, revised, revision, new, versus, vs,
+                      comparison, compare, compared, summary, summarize, summarise, overview,
+                      detail, details, between]
+
+observability:
+  langfuse_host: ${LANGFUSE_HOST:http://localhost:3000}
+  traces_dir: ${TRACES_DIR:traces}
+  log_level: INFO
+
+paths:
+  artifacts_dir: ${ARTIFACTS_DIR:artifacts}
+  samples_dir: data/samples
+
+eval:
+  datasets_dir: eval/datasets
+  results_dir: eval/results
+  judge_model: ${LLM_REASON_MODEL:gpt-4o}

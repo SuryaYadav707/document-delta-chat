@@ -1,0 +1,44 @@
+# secrets — NEVER commit real keys
+.env
+*.env
+!.env.example
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# runtime artifacts
+artifacts/
+data/uploads/
+traces/*.json
+eval/results/*.json
+!eval/results/.gitkeep
+
+# ocr / model caches
+.paddleocr/
+*.onnx
+
+# vector store
+.chroma/
+chroma/
+
+# stray run logs / scratch outputs
+*.log
+nohup.out
+gpu_*
+bench*
+*_result.json
+
+# timestamped eval runs (keep baseline.json committed as the reference)
+eval/results/run-*.json
+
+# os / editor
+.DS_Store
+.idea/
+.vscode/
