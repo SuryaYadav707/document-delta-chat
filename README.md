@@ -143,8 +143,6 @@ debuggable, cheap, and reproducible — the right default for a diff.
 | Pixel-level **geometry move-detection** on rasters | Unreliable on scans. Moves limited to sheet/location shifts on typed regions. |
 | **Connectivity / topology** diff (line-net changes) | Needs graph extraction the layer doesn't reliably give yet — flagged as research. |
 | Managed vector DB / cloud infra | Local Chroma keeps the run reproducible on a laptop. |
-| Auth / multi-user / durable multi-tenant store | Out of take-home scope; local artifacts only. |
-| Polished frontend | Minimal functional UI: pick comparison, chat, cited page viewer, markup. |
 
 > **Honest known limitation** — on the *sister-unit* pair (Lift 26-KA-901 vs Export 26-KA-902,
 > realistic but **not literal revisions**), setpoint pairing degrades because everything is

@@ -51,10 +51,6 @@ dropdown — it persists on disk):
 3. **Ask:** `what is the warranty period of the compressor?`
    → *"Not supported by the documents."* — it **refuses** instead of hallucinating.
 
-*(Optional — OCR path: upload `data/samples/export-scanned.pdf` as Revised and
-Compare. The trace's ingest span shows `format=scanned_pdf` + PaddleOCR time; chat
-then answers off the OCR'd text.)*
-
 ## 4. Eval scorecard — "is it actually good?"
 
 ```bash
